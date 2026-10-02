@@ -1,3 +1,5 @@
+![Offline Progress](nexus/media/header.png)
+
 # Offline Progress for Palworld
 
 Your bases keep working while the game is closed.
