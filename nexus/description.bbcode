@@ -41,7 +41,7 @@ Older UE4SS layouts keep mods in [i]Pal\Binaries\Win64\Mods[/i] instead. If that
 Install UE4SS on the server, then extract the zip into the PalServer folder. Dedicated servers use the same code path as a co-op host but haven't been tested yet, so please report how it goes.
 
 [b]Your first session[/b]
-The mod needs about an hour of play to learn each base: six 10-minute measurements, taken while nobody is inside that base. Until then that base isn't caught up. Learned rates carry over between sessions.
+There's no setup step, but an hour of normal play is recommended before relying on it. The mod learns from your bases as you play, measuring each one every 10 minutes while nobody is inside it, and catches an item up once it has 6 measurements. In normal play that's about an hour, often less for bases you're away from. To start sooner, lower minSamples in the config; fewer measurements means less accurate rates. Learned rates carry over between sessions.
 
 [line]
 [size=4][b]Optional features[/b][/size]
@@ -54,7 +54,7 @@ Settings are in [i]OfflineProgress\Scripts\config.lua[/i]. Each kind of change c
 [line]
 [size=4][b]FAQ[/b][/size]
 [b]Nothing was added after I loaded in.[/b]
-Each base needs about an hour of measuring first. The log at [i]Pal\Binaries\Win64\ue4ss\UE4SS.log[/i] shows what the mod found and did, in lines starting with [OfflineProgress].
+Each item needs 6 measurements first, about an hour of normal play. The log at [i]Pal\Binaries\Win64\ue4ss\UE4SS.log[/i] shows what the mod found and did, in lines starting with [OfflineProgress].
 
 [b]Does it affect performance?[/b]
 It does no per-frame work and runs on the host only. About 1–1.5 seconds while loading in, one storage measurement of about 0.2 seconds every 10 minutes, and a few milliseconds otherwise.
@@ -77,7 +77,7 @@ Yes. Delete the OfflineProgress folder. Items the mod already added stay in your
 [*]Production that never reaches storage isn't seen.
 [*]The in-game clock can only be moved forward to the next morning and to whole hours.
 [*]Raids, visitors, merchants and wild respawns don't happen offline.
-[*]Tested on Steam. Game Pass and dedicated servers haven't been tested.
+[*]Tested with a Steam host and a PS5 player joining through crossplay. Game Pass hosts and dedicated servers haven't been tested yet.
 [/list]
 
 [line]

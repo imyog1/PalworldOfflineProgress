@@ -8,7 +8,7 @@ loading, the way mobile idle games handle time away. Every player then gets a pr
 were away" summary of their own bases.
 
 > Built for **Palworld 1.0.5** with **UE4SS** (Okaetsu's experimental Palworld build).
-> Tested as a Steam co-op host, including with a PS5 player who joins by crossplay.
+> Tested with a Steam host and a PS5 player joining through crossplay.
 
 ```
 While you were away (2h 15m), your bases kept working:
@@ -63,9 +63,13 @@ Install UE4SS on the server, then extract the zip into the `PalServer` folder.
 
 ### Your first session
 
-The mod needs about an hour of play to learn each base: six 10-minute measurements, taken while
-nobody is inside that base. Until then that base isn't caught up. Learned rates are kept in
-`OfflineProgress/state.lua` and carry over between sessions.
+There's no setup step, but an hour of normal play is recommended before relying on it. The mod
+learns from your bases as you play, measuring each one every 10 minutes while nobody is inside
+it, and catches an item up once it has 6 measurements. In normal play that's about an hour, often
+less for bases you're away from. Items without enough measurements yet simply aren't added.
+
+To start sooner, lower `minSamples` in the config. Fewer measurements means less accurate rates.
+Learned rates are kept in `OfflineProgress/state.lua` and carry over between sessions.
 
 ## Configuration
 
@@ -121,8 +125,8 @@ change it made, read back from storage:
 [OfflineProgress]   D6662A2A: CopperOre 33116 -> 33543 (wanted +427)
 ```
 
-- **Nothing was added.** Each base needs about an hour of measuring first (see
-  [Your first session](#your-first-session)). Look for `N rate(s)` in the log.
+- **Nothing was added.** Each item needs 6 measurements first, about an hour of normal play
+  (see [Your first session](#your-first-session)). Look for `N rate(s)` in the log.
 - **"SAFE MODE".** A write didn't read back as expected, or the last catch-up wasn't in the save.
   Check the line before it, then set `clearSafeMode = true` once you're happy.
 - **Version mismatch.** After a Palworld update the mod only logs until it's updated.
@@ -144,7 +148,8 @@ Set `debugTiming.enabled = true` to log any step that takes longer than 5 ms.
   crafting chains are handled when `crafting` is on.
 - The in-game clock can only be moved forward to the next morning and to whole hours.
 - Raids, visitors, merchants and wild respawns don't happen offline.
-- Tested on Steam. Game Pass and dedicated servers haven't been tested.
+- Tested with a Steam host and a PS5 player joining through crossplay. Game Pass hosts and
+  dedicated servers haven't been tested yet.
 
 ## Uninstalling
 
