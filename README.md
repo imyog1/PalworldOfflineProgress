@@ -8,7 +8,8 @@ loading, the way mobile idle games handle time away. Every player then gets a pr
 were away" summary of their own bases.
 
 > Built for **Palworld 1.0.5** with **UE4SS** (Okaetsu's experimental Palworld build).
-> Tested with a Steam host and a PS5 player joining through crossplay.
+> Tested with a Steam host and a PS5 player joining through crossplay, with the world's
+> Multiplayer setting on (recommended).
 
 ```
 While you were away (2h 15m), your bases kept working:
@@ -40,6 +41,9 @@ Base 7: +224 Pure Quartz, +50 Stone, +32 Ore, Pals ate 20 food
   [Nexus Mods](https://www.nexusmods.com/palworld/mods/2237) ·
   [GitHub](https://github.com/Okaetsu/RE-UE4SS/releases)
 
+**Recommended:** turn on the world's **Multiplayer** setting. That's how the mod has been tested,
+and it's the only in-game setting it needs. Worlds with Multiplayer off haven't been tested yet.
+
 ## Installation
 
 ### Single-player and co-op host
@@ -48,7 +52,7 @@ Base 7: +224 Pure Quartz, +50 Stone, +32 Ore, Pals ate 20 food
 2. Extract the release zip into your Palworld folder, usually
    `C:\Program Files (x86)\Steam\steamapps\common\Palworld`.
    The mod ends up in `Palworld\Pal\Binaries\Win64\ue4ss\Mods\OfflineProgress`.
-3. Start the game and load your world.
+3. Start the game and load your world, with Multiplayer turned on in its settings (recommended).
 
 Older UE4SS layouts keep mods in `Pal\Binaries\Win64\Mods` instead. If that's yours, move the
 `OfflineProgress` folder there.
@@ -148,8 +152,9 @@ Set `debugTiming.enabled = true` to log any step that takes longer than 5 ms.
   crafting chains are handled when `crafting` is on.
 - The in-game clock can only be moved forward to the next morning and to whole hours.
 - Raids, visitors, merchants and wild respawns don't happen offline.
-- Tested with a Steam host and a PS5 player joining through crossplay. Game Pass hosts and
-  dedicated servers haven't been tested yet.
+- Tested with a Steam host and a PS5 player joining through crossplay, with the world's
+  Multiplayer setting on. Worlds with Multiplayer off, Game Pass hosts and dedicated servers
+  haven't been tested yet.
 
 ## Uninstalling
 
