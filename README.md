@@ -42,7 +42,7 @@ Base 7: +224 Pure Quartz, +50 Stone, +32 Ore, Pals ate 20 food
   [GitHub](https://github.com/Okaetsu/RE-UE4SS/releases)
 
 **Recommended:** turn on the world's **Multiplayer** setting. That's how the mod has been tested,
-and it's the only in-game setting it needs. Worlds with Multiplayer off haven't been tested yet.
+and it's the only in-game setting it needs. Worlds with Multiplayer off haven't been tested yet (probably works idk).
 
 ## Installation
 
