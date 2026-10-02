@@ -1,0 +1,17 @@
+# Per-install data written by the mod at runtime (learned rates, heartbeat, pending summaries)
+OfflineProgress/state.lua
+OfflineProgress/state.lua.bak
+OfflineProgress/state.lua.tmp
+
+# Build output
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
