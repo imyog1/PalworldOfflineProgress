@@ -27,4 +27,4 @@ Permissions tab (matches the MIT license in the repository):
 Images: Nexus needs at least one. A screenshot of the in-game chat summary works well.
 
 Before uploading, update the GitHub link in `description.bbcode` if the repository ends up at a
-different address than github.com/yog1/PalworldOfflineProgress.
+different address than github.com/sayikii/PalworldOfflineProgress.
