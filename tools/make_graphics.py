@@ -160,7 +160,7 @@ def gallery(shot, chat):
     for c in chips:
         x = chip(canvas, x, y, c, fnt, pad_x=pad, pad_y=12) + gap
     ImageDraw.Draw(canvas).text((960, y + 112),
-                                "Palworld 1.0.5  \u00b7  UE4SS  \u00b7  github.com/sayikii/PalworldOfflineProgress",
+                                "Palworld 1.0.5  \u00b7  UE4SS  \u00b7  github.com/imyog1/PalworldOfflineProgress",
                                 font=font("segoeui.ttf", 26), fill=MUTED, anchor="mm")
     return canvas.convert("RGB")
 
