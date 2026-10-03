@@ -1,1 +1,0 @@
-Your bases keep working while the game is closed. On load, each base gets what it would have produced while the world was offline, learned from your own bases' real production, and every player gets a private "while you were away" summary. Host-only: friends on any platform need nothing installed.
