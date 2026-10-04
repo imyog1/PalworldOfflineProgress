@@ -20,6 +20,7 @@ Fixes from player reports on Nexus Mods.
 - **Tidier summary.** It now arrives as one chat message, so the lines can't come in out of order.
   Each base gets its own heading, items are wrapped to fit the chat, and eggs, expeditions and
   food go on a line of their own. New setting `summary.maxLinesPerMessage`.
+- Tested working in single-player too, so the world's Multiplayer setting is no longer recommended.
 
 ## 1.0.0 (2026-10-02)
 
