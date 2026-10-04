@@ -33,7 +33,12 @@ local function dump() return table.concat(logs, "") end
 
 local hook
 function RegisterInitGameStatePostHook(f) hook = f end
-function ExecuteWithDelay(_, f) f() end
+local rounds = 0 -- follow-up rounds run so far (they are the 2.5 s delays)
+function ExecuteWithDelay(ms, f)
+    assert(math.type(ms) == "integer", "UE4SS needs whole milliseconds, got " .. tostring(ms))
+    if ms == 2500 then rounds = rounds + 1 end
+    f()
+end
 function ExecuteInGameThread(f) f() end
 function LoopAsync() end
 function RegisterHook() end
@@ -47,13 +52,43 @@ local smelter = F.station(1, 600, "Ingot", 10)
 local smeltWork = F.work(1, 601, 50, 10, 0, 600)
 local incubator = F.work(1, 77, 100, 50, 1, 500)
 local nextJob = F.work(1, 78, 100, 0, 1, 500)
+-- Says it is running but never moves (seen in game): must be left alone.
+local stuck = F.work(1, 79, 100, 10, 1, 501)
 local farm = F.obj({ BreedProgressTime = 0, BreedRequiredRealTime = 600, ExistPalEggMaxNum = 10,
                      SpawnedEggInstanceIds = F.tarray({}) })
 farm.CanProceedBreeding = function() return true end
 farm.GetBaseCampIdBelongTo = function() return F.guid(1) end
 farm.GetInstanceId = function() return F.guid(700) end
 local breedSets = 0
-farm.OnRep_UpdateBreedProgress = function() breedSets = breedSets + 1 end
+-- Acts like the game: progress set to nearly done means the next tick lays an egg and starts over.
+farm.OnRep_UpdateBreedProgress = function(self)
+    breedSets = breedSets + 1
+    if self.BreedProgressTime >= self.BreedRequiredRealTime - 1 then self.BreedProgressTime = 0 end
+end
+-- Its Pals only get back to it two rounds after catch-up, and it has cake for 3 eggs.
+local cake = F.slot("Cake", 3)
+local lateEggs = {}
+local lateFarm = F.storage(1, F.container(13, { cake }))
+lateFarm.BreedProgressTime, lateFarm.BreedRequiredRealTime, lateFarm.ExistPalEggMaxNum = 100, 600, 10
+lateFarm.SpawnedEggInstanceIds = F.tarray(lateEggs)
+lateFarm.LastProceedWorkerIndividualIds = F.tarray({ 1, 2 })
+local roundsAtCatchup
+lateFarm.CanProceedBreeding = function() return roundsAtCatchup ~= nil and rounds >= roundsAtCatchup + 2 end
+lateFarm.GetInstanceId = function() return F.guid(701) end
+lateFarm.OnRep_UpdateBreedProgress = function(self)
+    if self.BreedProgressTime >= self.BreedRequiredRealTime - 1 and cake.StackCount > 0 then
+        self.BreedProgressTime = 0
+        lateEggs[#lateEggs + 1] = #lateEggs + 1
+        cake.StackCount = cake.StackCount - 1
+    end
+end
+-- Pals assigned but no cake: never breeds.
+local emptyFarm = F.storage(1, F.container(14, {}))
+emptyFarm.BreedProgressTime, emptyFarm.BreedRequiredRealTime, emptyFarm.ExistPalEggMaxNum = 50, 600, 10
+emptyFarm.SpawnedEggInstanceIds = F.tarray({})
+emptyFarm.CanProceedBreeding = function() return false end
+emptyFarm.GetInstanceId = function() return F.guid(702) end
+emptyFarm.OnRep_UpdateBreedProgress = function() error("farm without cake was touched") end
 local crop = F.obj({ CurrentCropDataId = FName("Berries"), CurrentState = 3, CropProgressRateValue = 0.2 })
 crop.GetBaseCampIdBelongTo = function() return F.guid(1) end
 crop.GetInstanceId = function() return F.guid(800) end
@@ -65,9 +100,9 @@ F.world = {
     PalBaseCampModel = { F.base(1) },
     PalMapObjectItemChestModel = { F.storage(1, F.container(11, { ore, ingot, chestBerries })) },
     PalMapObjectPalFoodBoxModel = { F.storage(1, F.container(12, { feedBerries })) },
-    PalWorkProgress = { incubator, nextJob, smeltWork },
+    PalWorkProgress = { incubator, nextJob, stuck, smeltWork },
     PalMapObjectConvertItemModel = { smelter },
-    PalMapObjectBreedFarmModel = { farm },
+    PalMapObjectBreedFarmModel = { farm, lateFarm, emptyFarm },
     PalMapObjectFarmBlockV2Model = { crop },
     PalIndividualCharacterParameter = { palA, palB },
     PalItemIDManager = { F.itemManager() },
@@ -99,6 +134,7 @@ store.save(OFFLINE_PROGRESS_STATE_PATH, {
         time = { day = { value = 24, samples = 5 }, night = { value = 48, samples = 5 },
                  dayStart = { value = 6, samples = 2 }, nightStart = { value = 18, samples = 2 } },
         crops = { Berries = { value = 0.5, samples = 3 } },
+        progressing = { [F.key(77)] = now - 4000 }, -- the incubator moved during the last session
         bases = { [F.key(1)] = {
             processes = {
                 ["make:CopperIngot"] = proc("make:CopperIngot", "work", {}, { CopperIngot = 20 }),
@@ -125,6 +161,7 @@ setSave(now - 3600)
 dofile("Scripts/main.lua")
 
 test("first load: default settings (items, timers, breeding live; the rest dry run)", function()
+    roundsAtCatchup = rounds
     hook(gameState())
     expect(logged("Day/night: day 0%.08h, night 0%.25h, day 0%.50h, night 0%.17h"), "day/night split\n" .. dump())
     expect(logged("Spoilage %(dry run%): 2 perishable stack%(s%) aged, 0 would spoil"), "spoilage dry")
@@ -132,13 +169,20 @@ test("first load: default settings (items, timers, breeding live; the rest dry r
         "world time dry\n" .. dump())
     expect(logged("10 CopperIngot craft%(s%) finished from the queue %(dry run%)"), "crafting preview")
     expect(ingot.StackCount == 5 and ore.StackCount == 100, "no crafting items while crafting is dry run, and no ore lost")
-    expect(logged("breeding farm would lay 6 egg%(s%)\n"), "breeding live by default\n" .. dump())
+    expect(logged("breeding farm would lay 6 egg%(s%) %(working now%)\n"), "breeding live by default\n" .. dump())
+    expect(logged("breeding farm laid 6 of 6 egg%(s%)"), "eggs actually laid, one per round\n" .. dump())
     expect(breedSets == 7 and farm.BreedProgressTime == 0, "6 eggs in follow-up rounds, then the leftover progress")
+    expect(logged("breeding farm's Pals aren't at it yet; watching it"), "late farm watched\n" .. dump())
+    expect(logged("breeding farm's Pals got back to it after 5 s; laying 3 egg%(s%)"), "late farm started, eggs capped by cake\n" .. dump())
+    expect(#lateEggs == 3 and cake.StackCount == 0, "3 eggs laid from 3 cake, got " .. #lateEggs)
+    expect(logged("breeding farm has no cake, skipped"), "farm without cake skipped")
     expect(logged("2 Pal%(s%): hungry 0%.00h %(stomach %-0%), sanity %-2%.0 %(dry run%)"), "pal needs dry")
     expect(logged("1 crop plot%(s%) grown %(dry run%)"), "crops dry")
     expect(feedBerries.StackCount == 30, "food eaten: 10/h x 1h = 10")
     expect(near(incubator.CurrentWorkAmount, 99.5), "incubator left just short of done")
     expect(near(nextJob.CurrentWorkAmount, 99.5), "leftover time went to the next job at the same incubator")
+    expect(stuck.CurrentWorkAmount == 10, "job that never moved is left alone")
+    expect(logged("Skipped self%-running jobs that weren't progressing"), "stuck job reported\n" .. dump())
 end)
 
 test("second load with every feature live", function()

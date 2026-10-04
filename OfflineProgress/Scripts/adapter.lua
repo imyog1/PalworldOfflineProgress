@@ -144,11 +144,25 @@ end
 -- World, save and clock --------------------------------------------------------------
 
 local basesCache, basesCachedAt = nil, nil
+local workCache, workCachedAt = nil, nil
 
 function M.setGameState(gs)
     gameState = gs
     singletons, misses = {}, {}
     basesCache, basesCachedAt = nil, nil
+    workCache, workCachedAt = nil, nil
+end
+
+-- Work objects (incubators, machines, stations). Listed with a full object search, so the list
+-- is reused for 30 seconds: catch-up and its follow-up rounds read it many times.
+local function workList()
+    if workCache and workCachedAt and os.time() - workCachedAt < 30 then
+        local fresh = {}
+        for _, w in ipairs(workCache) do if valid(w) then fresh[#fresh + 1] = w end end
+        return fresh
+    end
+    workCache, workCachedAt = findAll(CLASSES.work), os.time()
+    return workCache
 end
 
 -- Player states straight from the game state's player list (cheap); a full object search
@@ -277,19 +291,60 @@ local function dateText(dt)
         K:GetHour(dt), K:GetMinute(dt), K:GetSecond(dt))
 end
 
--- Writes a date property. Assigning a date value directly doesn't stick in this UE4SS build
--- (FDateTime has no fields Lua can see), so if that doesn't read back, the date is imported
--- as text, the same way the engine loads it. `isMoved` checks the result.
+-- Calendar arithmetic in plain Lua (days since 1970-01-01, proleptic Gregorian). Date values
+-- from the engine are turned into numbers straight away: a returned date can share memory with
+-- the next date the engine returns, so holding one across calls isn't safe.
+local function daysFromCivil(y, m, d)
+    if m <= 2 then y = y - 1 end
+    local era = (y >= 0 and y or y - 399) // 400
+    local yoe = y - era * 400
+    local doy = (153 * ((m + 9) % 12) + 2) // 5 + d - 1
+    local doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+end
+
+local function civilFromDays(z)
+    z = z + 719468
+    local era = (z >= 0 and z or z - 146096) // 146097
+    local doe = z - era * 146097
+    local yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    local doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    local mp = (5 * doy + 2) // 153
+    local d = doy - (153 * mp + 2) // 5 + 1
+    local m = mp < 10 and mp + 3 or mp - 9
+    return yoe + era * 400 + (m <= 2 and 1 or 0), m, d
+end
+
+-- A date as whole seconds, read from the engine in one go.
+local function dateSeconds(dt)
+    local y, mo, d, h, mi, s = dateText(dt):match("^(%d+)%.(%d+)%.(%d+)%-(%d+)%.(%d+)%.(%d+)$")
+    return daysFromCivil(tonumber(y), tonumber(mo), tonumber(d)) * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(s)
+end
+
+local function secondsText(sec)
+    local days, rest = sec // 86400, sec % 86400
+    local y, m, d = civilFromDays(days)
+    return ("%04d.%02d.%02d-%02d.%02d.%02d"):format(y, m, d, rest // 3600, (rest % 3600) // 60, rest % 60)
+end
+M.calendar = { daysFromCivil = daysFromCivil, civilFromDays = civilFromDays, secondsText = secondsText } -- for tests
+
+-- Moves one date property earlier by `seconds` and checks it by reading it back. Tries a
+-- direct write first, then importing the date as text the way the engine loads it.
 -- Returns the method that worked ("assign" or "text"), or nil and the error.
-local function writeDate(obj, field, value, isMoved)
-    local ok, err = pcall(function() obj[field] = value end)
-    if ok and isMoved() then return "assign" end
-    local okText, errText = pcall(function()
+local function shiftDate(obj, field, seconds)
+    local before = dateSeconds(obj[field])
+    local function moved()
+        local ok, after = pcall(function() return dateSeconds(obj[field]) end)
+        return ok and math.abs((before - after) - seconds) <= 2
+    end
+    local okA, errA = pcall(function() obj[field] = minusSeconds(obj[field], seconds) end)
+    if okA and moved() then return "assign" end
+    local okT, errT = pcall(function()
         local prop = obj:Reflection():GetProperty(field)
-        prop:ImportText(dateText(value), prop:ContainerPtrToValuePtr(obj, 0), 0, obj)
+        prop:ImportText(secondsText(before - seconds), prop:ContainerPtrToValuePtr(obj, 0), 0, obj)
     end)
-    if okText and isMoved() then return "text" end
-    return nil, tostring(errText or err or "date didn't change")
+    if okT and moved() then return "text" end
+    return nil, tostring((not okT and errT) or (not okA and errA) or "date didn't change")
 end
 
 -- Moves a real-progress timer's dates earlier by `seconds`. Returns true if every date reads
@@ -297,21 +352,11 @@ end
 function M.shiftRealProgress(t, seconds)
     local allOk, method, firstErr = true, nil, nil
     for _, field in ipairs(t.fields) do
-        local ok, used, err = pcall(function()
-            local original = minusSeconds(t.ref[field], 0) -- a copy, not a view of the live value
-            local function isMoved()
-                local okM, moved = pcall(function() return secondsBetween(original, t.ref[field]) end)
-                return okM and math.abs(moved - seconds) <= 2
-            end
-            local m, e = writeDate(t.ref, field, minusSeconds(original, seconds), isMoved)
-            if m and field == t.fields[#t.fields] then
-                try(function() t.ref[t.onRep](t.ref, original) end)
-            end
-            return m, e
-        end)
+        local ok, used, err = pcall(shiftDate, t.ref, field, seconds)
         if not ok then used, err = nil, tostring(used) end
         if used then method = method or used else allOk = false; firstErr = firstErr or err end
     end
+    if method then try(function() t.ref[t.onRep](t.ref, t.ref[t.fields[#t.fields]]) end) end
     return allOk, method, firstErr
 end
 
@@ -631,7 +676,7 @@ function M.describe()
     for _, w in pairs(workers()) do for _ in pairs(w) do pals = pals + 1 end end
     return ("found %d base(s), %d chest(s), %d feed box(es), %d shared storage, %d work item(s), "
         .. "%d crafting station(s) (%d with a queue), %d breeding farm(s), %d crop plot(s), %d base Pal(s)%s")
-        :format(#activeBases(), chests, food, shared, #findAll(CLASSES.work), #stations, active,
+        :format(#activeBases(), chests, food, shared, #workList(), #stations, active,
             #findAll(CLASSES.breedFarms), #findAll(CLASSES.crops), pals,
             ignored > 0 and (", WARNING: %d container(s) marked not to be saved"):format(ignored) or "")
 end
@@ -741,21 +786,47 @@ local function timerKind(work)
     return "machine"
 end
 
+local function ownerClass(work)
+    local ok, name = pcall(function() return className(work.CachedOwnerMapObjectConcreteModel) end)
+    return ok and name ~= "" and name or "unknown"
+end
+
+-- Self-progressing work everywhere, for checking which of it actually moves:
+-- id -> { amount, base, class }
+function M.workAmounts()
+    local out = {}
+    for _, work in ipairs(workList()) do
+        pcall(function()
+            if work.AutoWorkSelfAmountBySec > 0 and work.RequiredWorkAmount > 0 and not work:IsCompleted() then
+                out[guidKey(work.ID)] = { amount = work.CurrentWorkAmount, base = guidKey(work.BaseCampIdBelongTo),
+                                          class = ownerClass(work) }
+            end
+        end)
+    end
+    return out
+end
+
 -- Self-progressing work at a base that is actually running (incubators with an egg and similar):
--- { { id, remaining = seconds, owner, power, kind }, ... }
-function M.getTimers(baseId)
-    local timers = {}
-    for _, work in ipairs(findAll(CLASSES.work)) do
+-- { { id, remaining = seconds, owner, power, kind }, ... }, plus the machine types skipped.
+-- proven(id, amount), when given, must confirm the work was seen progressing; work that
+-- reports itself as running but never moves (it happens) is skipped.
+function M.getTimers(baseId, proven)
+    local timers, skipped = {}, {}
+    for _, work in ipairs(workList()) do
         local rate = work.AutoWorkSelfAmountBySec
         if rate > 0 and work.RequiredWorkAmount > 0 and not work:IsCompleted()
-            and guidKey(work.BaseCampIdBelongTo) == baseId and isRunning(work) then
+            and guidKey(work.BaseCampIdBelongTo) == baseId then
             local id = guidKey(work.ID)
-            workById[id] = work
-            timers[#timers + 1] = { id = id, remaining = (work.RequiredWorkAmount - work.CurrentWorkAmount) / rate,
-                                    owner = ownerKey(work), power = needsPower(work), kind = timerKind(work) }
+            if not isRunning(work) or (proven and not proven(id, work.CurrentWorkAmount)) then
+                skipped[#skipped + 1] = ownerClass(work)
+            else
+                workById[id] = work
+                timers[#timers + 1] = { id = id, remaining = (work.RequiredWorkAmount - work.CurrentWorkAmount) / rate,
+                                        owner = ownerKey(work), power = needsPower(work), kind = timerKind(work) }
+            end
         end
     end
-    return timers
+    return timers, skipped
 end
 
 -- Moves each timer forward. A finished one is left a hair short of done, so the game
@@ -779,7 +850,7 @@ end
 -- machine (e.g. the next craft). Returns how many seconds were used.
 function M.advanceNextAtOwner(owner, seconds, exceptIds)
     local used = 0
-    for _, work in ipairs(findAll(CLASSES.work)) do
+    for _, work in ipairs(workList()) do
         local rate = work.AutoWorkSelfAmountBySec
         if rate > 0 and work.RequiredWorkAmount > 0 and not work:IsCompleted() and ownerKey(work) == owner
             and not exceptIds[guidKey(work.ID)] and isRunning(work) then
@@ -848,7 +919,7 @@ function M.applyStation(st, crafts)
         s.RemainProductNum = left
     else
         s.RemainProductNum = 1
-        for _, work in ipairs(findAll(CLASSES.work)) do
+        for _, work in ipairs(workList()) do
             if ownerKey(work) == st.id and work.RequiredWorkAmount > 0 and not work:IsCompleted() then
                 work.CurrentWorkAmount = work.RequiredWorkAmount * 0.999
                 try(function() work:OnRep_CurrentWorkAmount() end)
@@ -861,19 +932,62 @@ end
 -- Breeding farms ---------------------------------------------------------------------------
 
 -- baseId -> { { id, progress, required, canProceed, eggs, maxEggs, ref }, ... } (seconds)
+-- Cake in a breeding farm's box (it holds nothing else); nil if it can't be read.
+local function farmCake(f)
+    local ok, n = pcall(function()
+        local rec = containerOf(f)
+        if not rec then return nil end
+        local total = 0
+        for _, slot in ipairs(rec.slots) do
+            if slotItem(slot) then total = total + slot.StackCount end
+        end
+        return total
+    end)
+    if ok then return n end
+    return nil
+end
+
+-- The farm's own "can breed right now" answer. Right after a load it is often false because
+-- its Pals haven't walked back to it yet, so it is a hint only.
+local function canBreed(f)
+    local ok, can = pcall(function() return f:CanProceedBreeding() end)
+    return ok and can == true
+end
+
+-- How many Pals bred at this farm last time; nil if it can't be read.
+local function farmBreeders(f)
+    local ok, n = pcall(function() return arrayCount(f.LastProceedWorkerIndividualIds) end)
+    if ok then return n end
+    return nil
+end
+
 function M.breedFarms()
     local out = {}
     for _, f in ipairs(findAll(CLASSES.breedFarms)) do
-        try(function()
+        local ok, err = pcall(function()
             local baseId = guidKey(f:GetBaseCampIdBelongTo())
-            out[baseId] = out[baseId] or {}
-            table.insert(out[baseId], {
+            local farm = {
                 id = guidKey(f:GetInstanceId()), progress = f.BreedProgressTime, required = f.BreedRequiredRealTime,
-                canProceed = f:CanProceedBreeding(), eggs = arrayCount(f.SpawnedEggInstanceIds),
-                maxEggs = f.ExistPalEggMaxNum, ref = f })
+                canProceed = canBreed(f), eggs = arrayCount(f.SpawnedEggInstanceIds),
+                maxEggs = f.ExistPalEggMaxNum, cake = farmCake(f), breeders = farmBreeders(f), ref = f }
+            out[baseId] = out[baseId] or {}
+            table.insert(out[baseId], farm)
         end)
+        if not ok then print(("[OfflineProgress] Couldn't read a breeding farm: %s\n"):format(tostring(err))) end
     end
     return out
+end
+
+-- Current state of one farm found earlier, without searching again; nil if it's gone.
+function M.breedState(ref)
+    if not valid(ref) then return nil end
+    local ok, st = pcall(function()
+        return { progress = ref.BreedProgressTime, required = ref.BreedRequiredRealTime,
+                 eggs = arrayCount(ref.SpawnedEggInstanceIds), maxEggs = ref.ExistPalEggMaxNum }
+    end)
+    if not ok or not st then return nil end
+    st.canProceed, st.cake = canBreed(ref), farmCake(ref)
+    return st
 end
 
 function M.setBreedProgress(ref, seconds)

@@ -34,7 +34,7 @@ local function saveAt(unix) saveTime = unix end
 -- UE4SS hooks ---------------------------------------------------------------------------------
 local hook, loopFn
 function RegisterInitGameStatePostHook(f) hook = f end
-function ExecuteWithDelay(_, f) f() end
+function ExecuteWithDelay(ms, f) assert(math.type(ms) == "integer", "UE4SS needs whole milliseconds, got " .. tostring(ms)); f() end
 function ExecuteInGameThread(f) f() end
 function LoopAsync(_, f) loopFn = f end
 function RegisterHook() end

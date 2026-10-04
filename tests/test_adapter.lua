@@ -180,6 +180,8 @@ end)
 test("leftover time goes to the next job at the same machine", function()
     local nextJob = F.work(1, 80, 100, 0, 2, 500)
     table.insert(F.world.PalWorkProgress, nextJob)
+    -- The work list is cached for 30 s; a new load clears it (in game, a later round sees the job).
+    adapter.setGameState(F.obj({ GetWorldSaveDirectoryName = function() return F.fstr("8122951F") end }))
     local used = adapter.advanceNextAtOwner(key(500), 20, { [key(77)] = true })
     expectEq(used, 20, "seconds used"); expectEq(nextJob.CurrentWorkAmount, 40, "20 s at 2/s")
 end)

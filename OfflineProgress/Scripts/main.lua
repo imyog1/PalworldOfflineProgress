@@ -114,7 +114,7 @@ local function mergeWorld(into, from)
     for baseId, bs in pairs(from.bases or {}) do
         if sampleCount(bs) > sampleCount(into.bases[baseId]) then into.bases[baseId] = bs end
     end
-    for _, k in ipairs({ "time", "crops", "lastApply", "timestampMode", "pending" }) do
+    for _, k in ipairs({ "time", "crops", "lastApply", "timestampMode", "pending", "progressing", "farms" }) do
         local v = into[k]
         if v == nil or (type(v) == "table" and next(v) == nil) then into[k] = from[k] end
     end
@@ -131,6 +131,8 @@ local function selectWorld(id, diag)
     world.time = world.time or {}
     world.crops = world.crops or {}
     world.pending = world.pending or {}
+    world.progressing = world.progressing or {} -- self-running work id -> last time it was seen moving
+    world.farms = world.farms or {}             -- breeding farm id -> { active, at }
     if state.bases then -- state from before worlds were tracked separately
         if next(world.bases) == nil then
             world.bases = state.bases
@@ -429,29 +431,109 @@ local function worldTime(clock, tl, live)
         plan.exact and "" or " (nearest whole hour)")
 end
 
-local function runPasses(remaining)
-    if remaining <= 0 or #jobs == 0 then return end
-    ExecuteWithDelay(2500, function()
+local ROUND_SECONDS = 2.5
+local BREED_STALL_ROUNDS = 12 -- 30 s without the set-up egg being laid: its Pals stopped
+
+-- Eggs a farm is owed for the time away, limited by its free egg space and its cake.
+local function breedPlan(f, fedSeconds)
+    local total = f.progress + fedSeconds * cfg.timerEfficiency
+    local cycles = math.floor(total / f.required + 1e-6)
+    local eggs = math.min(cycles, math.max(0, f.maxEggs - f.eggs))
+    if f.cake then eggs = math.min(eggs, f.cake) end
+    return eggs, math.max(0, total - cycles * f.required), total
+end
+
+-- Turns a farm into a breeding job: the first egg is set up nearly done and the game lays it.
+-- Returns the job, or nil when there is nothing to lay (then just the progress moves on).
+local function startBreeding(job, f, eggs, leftover, total)
+    if eggs > 0 then
+        adapter.setBreedProgress(f.ref, f.required - 0.5)
+        job.kind, job.total, job.laid, job.waiting, job.waited = "breed", eggs, 0, true, 0
+        job.leftover, job.eggsBefore = leftover, f.eggs
+        return job
+    end
+    if total > f.progress then adapter.setBreedProgress(f.ref, math.min(total, f.required - 1)) end
+    return nil
+end
+
+-- One breeding round: once the game has laid the egg that was set up, set up the next one.
+-- Eggs only count (and go into the owner's summary) when the game actually lays them.
+local function breedRound(job)
+    local st = adapter.breedState(job.ref)
+    if not st then return false end
+    if job.waiting and (st.progress < st.required - 1 or st.eggs > job.eggsBefore) then
+        job.laid = job.laid + 1
+        job.waiting, job.waited, job.eggsBefore = false, 0, st.eggs
+        for player in pairs(job.owners or {}) do
+            summary.add(world.pending, player, job.baseId, job.name, { eggs = 1 })
+        end
+    end
+    if job.waiting then
+        job.waited = job.waited + 1
+        if job.waited < BREED_STALL_ROUNDS then return true end
+        log("  %s: breeding farm laid %d of %d egg(s); its Pals stopped breeding (cake left: %s).",
+            short(job.baseId), job.laid, job.total, st.cake and tostring(st.cake) or "?")
+        return false
+    end
+    if job.laid < job.total and st.eggs < st.maxEggs and st.cake ~= 0 then
+        adapter.setBreedProgress(job.ref, st.required - 0.5)
+        job.waiting = true
+        return true
+    end
+    adapter.setBreedProgress(job.ref, math.min(job.leftover, st.required - 1))
+    log("  %s: breeding farm laid %d of %d egg(s).", short(job.baseId), job.laid, job.total)
+    return false
+end
+
+-- A farm with cake and room whose Pals weren't at it when catch-up ran: start it as soon as
+-- they are (it can breed, or its progress moves), or give up after a while.
+local function watchRound(job)
+    local st = adapter.breedState(job.ref)
+    if not st then return false end
+    job.rounds = job.rounds + 1
+    local waited = job.rounds * ROUND_SECONDS
+    if st.canProceed or math.abs(st.progress - job.start) > 1e-3 then
+        local f = { ref = job.ref, progress = st.progress, required = st.required, eggs = st.eggs,
+                    maxEggs = st.maxEggs, cake = st.cake }
+        local eggs, leftover, total = breedPlan(f, job.fedSeconds)
+        log("  %s: breeding farm's Pals got back to it after %.0f s; laying %d egg(s).", short(job.baseId), waited, eggs)
+        return startBreeding(job, f, eggs, leftover, total) ~= nil
+    end
+    if waited < cfg.breedWatchSeconds then return true end
+    log("  %s: breeding farm's Pals didn't start within %.0f s; skipped.", short(job.baseId), waited)
+    return false
+end
+
+local function runPasses(remaining, onDone)
+    if remaining <= 0 or #jobs == 0 then
+        for _, job in ipairs(jobs) do
+            if job.kind == "breed" then
+                log("  %s: breeding farm laid %d of %d egg(s); follow-up rounds ran out.",
+                    short(job.baseId), job.laid, job.total)
+            elseif job.kind == "breedWatch" then
+                log("  %s: breeding farm's Pals didn't start before follow-up rounds ran out; skipped.", short(job.baseId))
+            end
+        end
+        jobs = {}
+        if onDone then onDone() end
+        return
+    end
+    ExecuteWithDelay(math.floor(ROUND_SECONDS * 1000), function()
         ExecuteInGameThread(function()
             local ok, err = pcall(function()
-                local farms = nil
                 local still = {}
                 for _, job in ipairs(jobs) do
                     if job.kind == "timer" then
+                        -- The next job at that machine may take a moment to appear (and to show up
+                        -- in the cached work list), so wait up to 16 rounds (40 s) for it.
                         local used = adapter.advanceNextAtOwner(job.owner, job.seconds, job.except)
                         job.seconds = job.seconds - used
-                        if used > 0 and job.seconds > 1 then still[#still + 1] = job end
+                        job.waited = used > 0 and 0 or (job.waited or 0) + 1
+                        if job.seconds > 1 and job.waited < 16 then still[#still + 1] = job end
                     elseif job.kind == "breed" then
-                        farms = farms or adapter.breedFarms()
-                        local farm
-                        for _, f in ipairs(farms[job.baseId] or {}) do if f.id == job.id then farm = f end end
-                        if farm and farm.canProceed and farm.eggs < farm.maxEggs and job.left > 0 then
-                            adapter.setBreedProgress(farm.ref, farm.required - 0.5)
-                            job.left = job.left - 1
-                            still[#still + 1] = job
-                        elseif farm then
-                            adapter.setBreedProgress(farm.ref, math.min(job.leftover, farm.required - 1))
-                        end
+                        if breedRound(job) then still[#still + 1] = job end
+                    elseif job.kind == "breedWatch" then
+                        if watchRound(job) then still[#still + 1] = job end
                     end
                 end
                 jobs = still
@@ -460,9 +542,34 @@ local function runPasses(remaining)
                 log("Follow-up round failed: %s", tostring(err))
                 jobs = {}
             end
-            runPasses(remaining - 1)
+            runPasses(remaining - 1, onDone)
         end)
     end)
+end
+
+-- Progress recorded a few seconds after load, compared at catch-up time.
+local baselineWork, baselineFarms = nil, nil
+
+-- Was this self-running work seen moving, since load or during the last session?
+local function provenFn()
+    if not baselineWork then return nil end
+    return function(id, amount)
+        local b = baselineWork[id]
+        if b and amount > b.amount + 1e-6 then return true end
+        local seen = world.progressing[id]
+        return seen ~= nil and os.time() - seen < 3 * 86400
+    end
+end
+
+-- Is this breeding farm actually breeding? Its Pals may not be back at it yet right after
+-- load, so its own "can breed" answer isn't enough on its own.
+local function farmActive(f)
+    if f.canProceed then return true, "working now" end
+    local b = baselineFarms and baselineFarms[f.id]
+    if b and f.progress ~= b then return true, "moving since load" end
+    local rec = world.farms[f.id]
+    if rec and rec.active then return true, "was working before you quit" end
+    return false, nil
 end
 
 local function catchUpBases(seconds, tl, apply)
@@ -476,6 +583,8 @@ local function catchUpBases(seconds, tl, apply)
     local crops = adapter.crops()
     local applied = {}
     local unplacedAny = false
+    local proven = provenFn()
+    local skippedAll = {}
     local owners = {}
     pcall(function() owners = adapter.baseOwners() end)
     local recipients = {}
@@ -542,9 +651,11 @@ local function catchUpBases(seconds, tl, apply)
 
         -- Timers that need power only run while Pals were fed (they work the generators).
         local plain, powered = {}, {}
-        for _, t in ipairs(adapter.getTimers(id)) do
+        local found, skipped = adapter.getTimers(id, proven)
+        for _, t in ipairs(found) do
             table.insert(t.power and powered or plain, t)
         end
+        for _, cls in ipairs(skipped) do skippedAll[cls] = (skippedAll[cls] or 0) + 1 end
         local timers = catchup.advanceTimers(plain, seconds * cfg.timerEfficiency)
         for _, t in ipairs(catchup.advanceTimers(powered, math.min(seconds, fedSeconds) * cfg.timerEfficiency)) do
             timers[#timers + 1] = t
@@ -643,21 +754,36 @@ local function catchUpBases(seconds, tl, apply)
             end
         end
 
-        -- Breeding farms run while their Pals are fed
+        -- Breeding farms: the game lays every egg itself, one set up at a time, so cake and egg
+        -- space are used as they normally would be.
+        local breeding = 0
         for _, f in ipairs(farms[id] or {}) do
-            if f.canProceed and f.required > 0 then
-                local total = f.progress + fedSeconds * cfg.timerEfficiency
-                local cycles = math.floor(total / f.required + 1e-6)
-                local eggs = math.min(cycles, math.max(0, f.maxEggs - f.eggs))
-                local leftover = math.max(0, total - cycles * f.required)
-                log("  %s: breeding farm would lay %d egg(s)%s", short(id), eggs, live.breeding and "" or " (dry run)")
+            local active, why = farmActive(f)
+            log("  %s: breeding farm at %.1f of %.0f s, %d of %d egg(s) waiting, cake %s, can breed now: %s, Pals that bred here: %s",
+                short(id), f.progress, f.required, f.eggs, f.maxEggs, f.cake and tostring(f.cake) or "?",
+                tostring(f.canProceed), f.breeders and tostring(f.breeders) or "?")
+            if f.required <= 0 then
+                log("  %s: breeding farm has no breeding time set, skipped", short(id))
+            elseif f.eggs >= f.maxEggs then
+                log("  %s: breeding farm is full of eggs, skipped", short(id))
+            elseif f.cake == 0 then
+                log("  %s: breeding farm has no cake, skipped", short(id))
+            elseif not active then
+                log("  %s: breeding farm's Pals aren't at it yet; watching it for up to %d s%s", short(id),
+                    cfg.breedWatchSeconds, live.breeding and "" or " (dry run)")
                 if live.breeding then
-                    gains.eggs = gains.eggs + eggs
-                    if eggs > 0 then
-                        adapter.setBreedProgress(f.ref, f.required - 0.5)
-                        jobs[#jobs + 1] = { kind = "breed", baseId = id, id = f.id, left = eggs - 1, leftover = leftover }
-                    else
-                        adapter.setBreedProgress(f.ref, math.min(total, f.required - 1))
+                    breeding = breeding + 1
+                    jobs[#jobs + 1] = { kind = "breedWatch", baseId = id, id = f.id, ref = f.ref, start = f.progress,
+                                        fedSeconds = fedSeconds, rounds = 0 }
+                end
+            else
+                local eggs, leftover, total = breedPlan(f, fedSeconds)
+                log("  %s: breeding farm would lay %d egg(s) (%s)%s", short(id), eggs, why, live.breeding and "" or " (dry run)")
+                if live.breeding then
+                    local job = startBreeding({ baseId = id, id = f.id, ref = f.ref }, f, eggs, leftover, total)
+                    if job then
+                        breeding = breeding + 1
+                        jobs[#jobs + 1] = job
                     end
                 end
             end
@@ -704,8 +830,13 @@ local function catchUpBases(seconds, tl, apply)
             who[owners[id].owner] = true
         end
         local name = base.shared and "Shared storage" or (owners[id] and owners[id].name) or nil
+        for _, job in ipairs(jobs) do
+            if (job.kind == "breed" or job.kind == "breedWatch") and job.baseId == id and not job.owners then
+                job.owners, job.name = who, name
+            end
+        end
         local any = next(gains.items) or next(gains.crafts) or gains.eaten > 0 or gains.hatched > 0 or gains.machines > 0
-            or gains.eggs > 0 or gains.expeditions > 0
+            or gains.eggs > 0 or gains.expeditions > 0 or breeding > 0
         if any then
             if next(who) == nil then log("  %s: owner unknown, so it isn't in anyone's summary", short(id)) end
             for player in pairs(who) do
@@ -716,6 +847,12 @@ local function catchUpBases(seconds, tl, apply)
         record("per base", clockMs() - baseStart)
     end
     summary.addHours(world.pending, recipients, gapHours)
+    if next(skippedAll) then
+        local parts = {}
+        for cls, n in pairs(skippedAll) do parts[#parts + 1] = ("%dx %s"):format(n, cls) end
+        table.sort(parts)
+        log("Skipped self-running jobs that weren't progressing (empty or idle): %s", table.concat(parts, ", "))
+    end
     if unplacedAny then log("Some items had no room; totals so far are kept per base in state.lua (unplaced).") end
     return applied
 end
@@ -729,28 +866,40 @@ local MAX_SEND_TRIES = 3
 -- per base plus pickup popups for their biggest gains. With requireSeen, a player must have
 -- been in the world at the previous check too, so nothing is sent while they're still loading.
 -- Sends one player their pending summary: a chat message per base plus pickup popups.
+local MESSAGE_GAP_MS = 600 -- between a summary's chat messages, so they arrive in order
+
 local function deliverTo(p)
     local entry = world.pending[p.key]
     if not entry then return end
-    local lines, top = summary.format(entry, adapter.itemName, cfg.summary.maxItemsPerBase)
-    if not lines then
+    local blocks, top = summary.format(entry, adapter.itemName, cfg.summary.maxItemsPerBase)
+    if not blocks then
         world.pending[p.key] = nil
         return
     end
+    local messages = summary.messages(blocks, cfg.summary.maxLinesPerMessage)
     local style, styleErr = nil, nil
     local ok, err = pcall(function()
-        for _, line in ipairs(lines) do
-            style, styleErr = adapter.sendChat(line, { p.uid }, cfg.summary.chatStyle, cfg.summary.sender)
-        end
+        style, styleErr = adapter.sendChat(messages[1], { p.uid }, cfg.summary.chatStyle, cfg.summary.sender)
         for i, t in ipairs(top) do
             if i > (cfg.summary.popups or 0) then break end
             adapter.itemPopup(p.state, t.item, math.floor(t.n), 0.4 * (i - 1))
         end
     end)
     if ok then
-        log("Summary shown to player %s (%s chat):", short(p.key), tostring(style))
+        -- Messages sent at the same moment can show up in any order; space out the rest.
+        for i = 2, #messages do
+            ExecuteWithDelay(MESSAGE_GAP_MS * (i - 1), function()
+                ExecuteInGameThread(function()
+                    local okM, errM = pcall(adapter.sendChat, messages[i], { p.uid }, cfg.summary.chatStyle, cfg.summary.sender)
+                    if not okM then log("Couldn't send part %d of player %s's summary: %s", i, short(p.key), tostring(errM)) end
+                end)
+            end)
+        end
+        log("Summary shown to player %s (%s chat, %d message(s)):", short(p.key), tostring(style), #messages)
         if styleErr then log("  (player-style chat failed, used system chat: %s)", styleErr) end
-        for _, line in ipairs(lines) do log("  | %s", line) end
+        for _, block in ipairs(blocks) do
+            for _, line in ipairs(block) do log("  | %s", line) end
+        end
         world.pending[p.key] = nil
     else
         entry.tries = (entry.tries or 0) + 1
@@ -862,14 +1011,16 @@ local function runCatchup()
             end
             timed("save state", saveState)
             log("Timing (catch-up): %s.", timingReport({ "catch-up", "per base", "save state" }))
-            runPasses(cfg.maxCatchupPasses)
-            -- Whoever is already in the world (the host) gets their summary shortly after load.
-            ExecuteWithDelay(10000, function()
-                ExecuteInGameThread(function()
-                    local ok, err = pcall(timed, "summary", deliver, false)
-                    if not ok then log("Summary failed: %s", tostring(err)) end
-                    log("Timing (summary): %s.", timingReport({ "summary" }))
-                    saveState()
+            -- Whoever is already in the world (the host) gets their summary once the follow-up
+            -- rounds (eggs, next jobs) are done, so it only lists what actually happened.
+            runPasses(cfg.maxCatchupPasses, function()
+                ExecuteWithDelay(5000, function()
+                    ExecuteInGameThread(function()
+                        local ok, err = pcall(timed, "summary", deliver, false)
+                        if not ok then log("Summary failed: %s", tostring(err)) end
+                        log("Timing (summary): %s.", timingReport({ "summary" }))
+                        saveState()
+                    end)
                 end)
             end)
         end)
@@ -879,6 +1030,34 @@ end
 -- Heartbeat and measuring -------------------------------------------------------------------
 
 local prevSnap, lastClock = nil, nil
+local prevWork, prevFarms = nil, nil
+
+-- Which self-running work and breeding farms actually moved since the last measurement, so
+-- catch-up only advances things that were really working.
+local function sampleProgress()
+    local now = os.time()
+    local amounts = adapter.workAmounts()
+    if prevWork then
+        for id, a in pairs(amounts) do
+            local p = prevWork[id]
+            if p and a.amount > p.amount + 1e-6 then world.progressing[id] = now end
+        end
+    end
+    prevWork = amounts
+    for id, t in pairs(world.progressing) do
+        if now - t > 3 * 86400 then world.progressing[id] = nil end
+    end
+    local farmsNow = {}
+    for _, list in pairs(adapter.breedFarms()) do
+        for _, f in ipairs(list) do
+            farmsNow[f.id] = f.progress
+            if prevFarms and prevFarms[f.id] ~= nil then
+                world.farms[f.id] = { active = f.canProceed or f.progress ~= prevFarms[f.id], at = now }
+            end
+        end
+    end
+    prevFarms = farmsNow
+end
 local windowMeta, windowPhase, windowPhaseMixed, sinceSample = {}, nil, false, 0
 local prevCrops = nil
 
@@ -961,6 +1140,8 @@ local function sample(windowSeconds)
     end
     prevSnap = snap
     sampleCrops(windowSeconds / 3600)
+    local okP, errP = pcall(sampleProgress)
+    if not okP then log("Progress sampling failed: %s", tostring(errP)) end
 end
 
 local function tick()
@@ -996,14 +1177,14 @@ local loopStarted = false
 local function startHeartbeat()
     if loopStarted then return end
     loopStarted = true
-    LoopAsync((cfg.summary and cfg.summary.joinCheckSeconds or 5) * 1000, function()
+    LoopAsync(math.floor((cfg.summary and cfg.summary.joinCheckSeconds or 5) * 1000), function()
         ExecuteInGameThread(function()
             local ok, err = pcall(timed, "join check", checkJoins)
             if not ok then log("Join check failed: %s", tostring(err)) end
         end)
         return false -- keep looping
     end)
-    LoopAsync(cfg.heartbeatSeconds * 1000, function()
+    LoopAsync(math.floor(cfg.heartbeatSeconds * 1000), function()
         ExecuteInGameThread(function()
             local ok, err = pcall(timed, "heartbeat", tick)
             if not ok then log("Heartbeat failed: %s", tostring(err)) end
@@ -1069,6 +1250,7 @@ RegisterInitGameStatePostHook(function(context)
         -- Back at the title screen: stop measuring until a world is loaded again.
         if active then saveState() end
         active, world, worldKey, prevSnap, lastClock, prevCrops = false, nil, nil, nil, nil, nil
+        prevWork, prevFarms = nil, nil
         resetWindow()
         loadedOnce = false
         return
@@ -1084,8 +1266,26 @@ RegisterInitGameStatePostHook(function(context)
     saveAgeAtLoad, saveAgeWhy = nil, nil
     pcall(function() saveAgeAtLoad, saveAgeWhy = adapter.saveAge() end)
     saveAgeReadAt = os.time()
+    -- A few seconds in, note how far each machine and breeding farm has got; catch-up compares
+    -- against this to see what is really running.
+    baselineWork, baselineFarms = nil, nil
+    ExecuteWithDelay(3000, function()
+        ExecuteInGameThread(function()
+            local ok, err = pcall(function()
+                local work = adapter.workAmounts()
+                local farms = {}
+                for _, list in pairs(adapter.breedFarms()) do
+                    for _, f in ipairs(list) do farms[f.id] = f.progress end
+                end
+                baselineWork, baselineFarms = work, farms
+                -- The first 10-minute measurement compares against this, so one is enough.
+                prevWork, prevFarms = prevWork or work, prevFarms or farms
+            end)
+            if not ok then log("Couldn't note progress after load: %s", tostring(err)) end
+        end)
+    end)
     jobs = {}
-    ExecuteWithDelay(cfg.startupDelaySeconds * 1000, function()
+    ExecuteWithDelay(math.floor(cfg.startupDelaySeconds * 1000), function()
         ExecuteInGameThread(function()
             pcall(function() adapter.setGameState(realGameState(gameState)) end)
             local ok, err = pcall(runCatchup)

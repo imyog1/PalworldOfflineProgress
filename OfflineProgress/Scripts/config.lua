@@ -28,6 +28,9 @@ return {
         enabled = true,
         popups = 5,           -- pickup popups for the biggest gains (0 = chat only)
         maxItemsPerBase = 6,  -- items listed per base before "+N more"
+        -- Lines per chat message. The whole summary normally fits in one, which keeps it in
+        -- order; set to 1 to send every line as its own message.
+        maxLinesPerMessage = 16,
         -- "system": a system message (shows up for PS5 players too). "player": sent like a typed
         -- Global chat message instead; falls back to "system" if the game won't take it.
         chatStyle = "system",
@@ -51,7 +54,8 @@ return {
     sampleSeconds = 600,    -- length of each rate-measuring window
     rateSmoothing = 0.2,    -- weight of the newest window in the running average
     minSamples = 6,         -- windows needed before a rate is trusted (~1 hour)
-    maxCatchupPasses = 20,  -- follow-up rounds for queues (eggs, next crafts) per load
+    maxCatchupPasses = 60,  -- follow-up rounds, 2.5 s apart, for eggs and next jobs (stops early when done)
+    breedWatchSeconds = 60, -- how long to wait for a breeding farm's Pals to get back to it after load
 
     startupDelaySeconds = 15, -- wait for bases to finish loading before catching up
 

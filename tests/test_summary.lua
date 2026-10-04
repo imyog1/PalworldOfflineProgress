@@ -17,19 +17,30 @@ local summary = require("summary")
 
 local function pretty(id) return (id:gsub("(%l)(%u)", "%1 %2")) end
 
-test("summary lists each base with its biggest gains first", function()
+local DOT, BULLET = "\u{B7}", "\u{2022}"
+local function same(got, want, what)
+    expect(#got == #want, ("%s: %d lines, wanted %d\n%s"):format(what, #got, #want, table.concat(got, "\n")))
+    for i = 1, #want do expect(got[i] == want[i], ("%s line %d:\n  got  %s\n  want %s"):format(what, i, got[i], want[i])) end
+end
+
+test("summary: a header, then each base with its biggest gains first and its events below", function()
     local pending = {}
     summary.add(pending, "P1", "B1", "Mining Base", { items = { Wood = 1750, Stone = 2403, CopperOre = 12 }, eaten = 30 })
     summary.add(pending, "P1", "B2", "Ranch", { items = { Milk = 95 }, hatched = 1, eggs = 2, expeditions = 1 })
     summary.addHours(pending, { P1 = true }, 2.25)
-    local lines, top = summary.format(pending.P1, pretty, 6)
-    expect(lines[1] == "While you were away (2h 15m), your bases kept working:", lines[1])
-    expect(lines[2] == "Mining Base: +2,403 Stone, +1,750 Wood, +12 Copper Ore, Pals ate 30 food", lines[2])
-    expect(lines[3] == "Ranch: +95 Milk, 1 incubator finished, 2 eggs laid, 1 expedition moved ahead", lines[3])
+    local blocks, top = summary.format(pending.P1, pretty, 6)
+    same(blocks[1], { "While you were away (2h 15m), your bases kept working:" }, "header")
+    same(blocks[2], { BULLET .. " Mining Base",
+                      "    +2,403 Stone " .. DOT .. " +1,750 Wood " .. DOT .. " +12 Copper Ore",
+                      "    Pals ate 30 food" }, "first base")
+    same(blocks[3], { BULLET .. " Ranch",
+                      "    +95 Milk",
+                      "    1 egg hatched " .. DOT .. " 2 eggs laid",   -- the next one would make the line too long
+                      "    1 expedition moved ahead" }, "second base")
     expect(top[1].item == "Stone" and top[2].item == "Wood", "popups biggest first")
 end)
 
-test("long lists are cut off with '+N more', and gains add up across catch-ups", function()
+test("long lists are cut off with '+N more items', and gains add up across catch-ups", function()
     local pending = {}
     local many = {}
     for i = 1, 9 do many["Item" .. string.char(64 + i)] = i end
@@ -37,17 +48,36 @@ test("long lists are cut off with '+N more', and gains add up across catch-ups",
     summary.add(pending, "P", "B", "Base", { items = { ItemA = 10 } })
     summary.addHours(pending, { P = true }, 0.5)
     summary.addHours(pending, { P = true }, 0.5)
-    local lines = summary.format(pending.P, pretty, 3)
-    expect(lines[1]:find("%(1h%)"), "hours summed: " .. lines[1])
-    expect(lines[2] == "Base: +11 Item A, +9 Item I, +8 Item H, +6 more", lines[2])
+    local blocks = summary.format(pending.P, pretty, 3)
+    expect(blocks[1][1]:find("%(1h%)"), "hours summed: " .. blocks[1][1])
+    same(blocks[2], { BULLET .. " Base",
+                      "    +11 Item A " .. DOT .. " +9 Item I " .. DOT .. " +8 Item H " .. DOT .. " +6 more items" }, "base")
 end)
 
 test("other self-running work isn't called an incubator", function()
     local pending = {}
     summary.add(pending, "P", "B", "Base 1", { items = {}, machines = 1 })
     summary.addHours(pending, { P = true }, 1)
-    local lines = summary.format(pending.P, pretty)
-    expect(lines[2] == "Base 1: 1 machine job finished", tostring(lines[2]))
+    local blocks = summary.format(pending.P, pretty)
+    same(blocks[2], { BULLET .. " Base 1", "    1 machine job done" }, "base")
+end)
+
+test("lines never get wider than the chat", function()
+    local pending = {}
+    local items = {}
+    for i = 1, 12 do items["Long Item Name Number " .. i] = 100 + i end
+    summary.add(pending, "P", "B", "Base", { items = items, hatched = 3, eggs = 4, expeditions = 2, eaten = 99, machines = 1 })
+    summary.addHours(pending, { P = true }, 1)
+    local blocks = summary.format(pending.P, function(id) return id end, 12)
+    for _, line in ipairs(blocks[2]) do expect(utf8.len(line) <= 56, "too wide: " .. line) end
+end)
+
+test("the summary goes out as one message; split only between bases, or line by line if asked", function()
+    local blocks = { { "H" }, { "A", "a1", "a2" }, { "B", "b1" }, { "C", "c1", "c2", "c3" } }
+    same(summary.messages(blocks, 16), { "H\nA\na1\na2\nB\nb1\nC\nc1\nc2\nc3" }, "one message")
+    same(summary.messages(blocks, 6), { "H\nA\na1\na2\nB\nb1", "C\nc1\nc2\nc3" }, "bases kept whole")
+    same(summary.messages(blocks, 3), { "H", "A\na1\na2", "B\nb1", "C\nc1\nc2", "c3" }, "a base longer than a message is split")
+    same(summary.messages(blocks, 1), { "H", "A", "a1", "a2", "B", "b1", "C", "c1", "c2", "c3" }, "line by line")
 end)
 
 test("nothing gained means no summary", function()
@@ -72,7 +102,7 @@ local function dump() return table.concat(logs, "") end
 
 local hook, loopFn
 function RegisterInitGameStatePostHook(f) hook = f end
-function ExecuteWithDelay(_, f) f() end
+function ExecuteWithDelay(ms, f) assert(math.type(ms) == "integer", "UE4SS needs whole milliseconds, got " .. tostring(ms)); f() end
 function ExecuteInGameThread(f) f() end
 local loops = {}
 function LoopAsync(ms, f) loops[ms] = f; loopFn = f end
@@ -147,11 +177,11 @@ dofile("Scripts/main.lua")
 test("host sees only their own base (plus shared storage) right after loading", function()
     hook(gs)
     local mine = chats[F.key(1)] or {}
-    expect(#mine == 3, "header + Mining Base + Shared storage, got " .. #mine .. "\n" .. dump())
-    expect(mine[1]:find("While you were away %(1h%)"), mine[1])
-    local text = table.concat(mine, "\n")
-    expect(text:find("Mining Base: %+75 Stone"), text)
-    expect(text:find("Shared storage: %+15 Wood"), text)
+    expect(#mine == 1, "one message, got " .. #mine .. "\n" .. dump())
+    expect(mine[1]:find("^While you were away %(1h%)"), mine[1])
+    local text = mine[1]
+    expect(text:find("Mining Base\n    %+75 Stone"), text)
+    expect(text:find("Shared storage\n    %+15 Wood"), text)
     expect(not text:find("Ranch") and not text:find("Milk"), "nothing about the friend's base")
     expect(popups[F.key(1)][1].item == "Stone" and popups[F.key(1)][1].n == 75, "pickup popup for the biggest gain")
     expect(chats[F.key(2)] == nil, "friend isn't online, so nothing sent to them yet")
@@ -183,12 +213,12 @@ test("a player who joins gets their summary 5 seconds after their character appe
     local theirs = chats[F.key(2)] or {}
     local text = table.concat(theirs, "\n")
     expect(theirs[1] and theirs[1]:find("%(1h 30m%)"), "combined time: " .. tostring(theirs[1]) .. "\n" .. dump())
-    expect(text:find("Ranch: %+45 Milk"), text)
-    expect(text:find("Shared storage: %+"), "shared storage is theirs too")
+    expect(text:find("Ranch\n    %+45 Milk"), text)
+    expect(text:find("Shared storage\n    %+"), "shared storage is theirs too")
     expect(not text:find("Mining Base"), "nothing about the host's base")
     expect(store.load(OFFLINE_PROGRESS_STATE_PATH).worlds.W.pending[F.key(2)] == nil, "delivered once, then cleared")
     now = now + 5; join()
-    expect(#theirs == 3, "not sent twice")
+    expect(#theirs == 1, "not sent twice")
 end)
 
 test("if a joining player's character can't be seen, they still get it after 45 seconds", function()
@@ -204,7 +234,7 @@ test("if a joining player's character can't be seen, they still get it after 45 
     for _ = 1, 9 do now = now + 5; join() end -- first check notes the join; 9th is 40 s later
     expect(chats[F.key(3)] == nil, "still waiting at 40 s")
     now = now + 5; join()
-    expect(chats[F.key(3)] and #chats[F.key(3)] >= 2, "sent at 45 s: " .. dump())
+    expect(chats[F.key(3)] and #chats[F.key(3)] == 1, "sent at 45 s: " .. dump())
 end)
 
 os.remove(OFFLINE_PROGRESS_STATE_PATH)

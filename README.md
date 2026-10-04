@@ -15,9 +15,17 @@ were away" summary of their own bases.
 
 ```
 While you were away (2h 15m), your bases kept working:
-Base 2: +74 Red Berries, +23 Baked Berries, +17 Honey, +17 Milk, +14 Wood, +10 Wheat, +1 more
-Base 5: +2,403 Stone, +1,750 Wood, +1,640 Ore, +126 Fiber, +51 Tomato, +42 Lettuce, +3 more
-Base 7: +224 Pure Quartz, +50 Stone, +32 Ore, Pals ate 20 food
+• Base 2
+    +74 Red Berries · +23 Baked Berries · +17 Honey
+    +17 Milk · +14 Wood · +10 Wheat · +1 more item
+    2 eggs laid
+• Base 5
+    +2,403 Stone · +1,750 Wood · +1,640 Ore · +126 Fiber
+    +51 Tomato · +42 Lettuce · +3 more items
+    1 egg hatched · 1 expedition moved ahead
+• Base 7
+    +224 Pure Quartz · +50 Stone · +32 Ore
+    Pals ate 20 food
 ```
 
 ## Features
@@ -27,8 +35,9 @@ Base 7: +224 Pure Quartz, +50 Stone, +32 Ore, Pals ate 20 food
   new Pals and rebuilt production lines are picked up automatically.
 - **Realistic catch-up.** Storage fills up, feed boxes run dry, and Pals stop working when there's
   no food. Offline work runs at 75% by default and is capped at 24 hours.
-- **More than items.** Incubators keep hatching and breeding farms keep laying eggs. Expeditions
-  and medical-bed revivals finish on time; the game stops their clock while the world is closed.
+- **More than items.** Incubators keep hatching and breeding farms keep laying eggs (with cake).
+  Expeditions and medical-bed revivals finish on time; the game stops their clock while the world
+  is closed.
 - **Per-player summaries.** After each catch-up, every player gets a private chat summary and
   pickup popups for the bases they placed. Players who are offline get theirs when they next join.
 - **Only the host needs it.** Other players need nothing installed, on any platform.
@@ -88,6 +97,7 @@ Settings are in `OfflineProgress/Scripts/config.lua`. The most useful ones:
 | `workEfficiency` | `0.75` | Offline production as a fraction of the measured rate |
 | `summary.enabled` | `true` | Per-player "while you were away" summary |
 | `summary.popups` | `5` | Pickup popups for the biggest gains (`0` for chat only) |
+| `summary.maxLinesPerMessage` | `16` | Lines per chat message; the summary normally fits in one. `1` sends each line separately |
 | `itemWriteMode` | `"topUpOnly"` | Only grows existing stacks. `"full"` also fills empty slots |
 
 ### Optional features
@@ -135,6 +145,9 @@ change it made, read back from storage:
   (see [Your first session](#your-first-session)). Look for `N rate(s)` in the log.
 - **"SAFE MODE".** A write didn't read back as expected, or the last catch-up wasn't in the save.
   Check the line before it, then set `clearSafeMode = true` once you're happy.
+- **A breeding farm laid no eggs.** It needs its Pals, cake and room for eggs. After loading, the
+  mod waits up to a minute for the Pals to walk back to it. The `breeding farm at ...` line shows
+  its progress, eggs and cake, and the line after it says why it was skipped.
 - **Version mismatch.** After a Palworld update the mod only logs until it's updated.
 - **Start over.** Delete `OfflineProgress/state.lua` to forget all learned rates.
 

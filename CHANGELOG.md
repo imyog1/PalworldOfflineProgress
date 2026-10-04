@@ -7,11 +7,19 @@ Fixes from player reports on Nexus Mods.
 - **Expeditions now progress while the game is closed.** The finish time couldn't be written
   directly, so it's now written the way the game loads dates. The log says which way worked, or
   why it didn't.
-- **No more incubator messages without eggs.** Empty incubators were counted as running and
-  reported as "1 incubator finished" on every load. Only work the game marks as running is
-  advanced now, and other self-running machines are reported as "machine job finished".
-- **Breeding farms are on by default.** Farms with Pals and cake lay the eggs they would have
-  laid. (In 1.0.0 this was off and only logged.)
+- **No more phantom "finished" messages.** Empty incubators, and machines that say they're running
+  but never move, were reported as finished on every load. Now only work that was seen making
+  progress (just after loading, or during your last session) is advanced. Anything skipped is
+  named in the log.
+- **Breeding farms lay their eggs, and are on by default.** Right after a load a farm's Pals
+  aren't back at it yet, so its own "can breed" answer was always no and farms were skipped. A
+  farm with cake and room for eggs is now watched for up to a minute until its Pals return. The
+  game lays each egg itself, one at a time, so cake is used as normal, and no more eggs are laid
+  than there is cake for. Each farm's state is logged. (In 1.0.0 breeding was off and only logged.)
+- Follow-up rounds can run longer (up to 2.5 minutes) and stop as soon as nothing is left.
+- **Tidier summary.** It now arrives as one chat message, so the lines can't come in out of order.
+  Each base gets its own heading, items are wrapped to fit the chat, and eggs, expeditions and
+  food go on a line of their own. New setting `summary.maxLinesPerMessage`.
 
 ## 1.0.0 (2026-10-02)
 

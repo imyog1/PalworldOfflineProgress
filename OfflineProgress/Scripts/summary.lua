@@ -55,7 +55,31 @@ local function sortedItems(items)
     return list
 end
 
--- Chat lines for one player, plus their biggest gains (for pickup popups).
+-- Layout: the game wraps chat at roughly this many characters, so lines are packed to fit.
+local WIDTH = 56
+local INDENT = "    "
+local SEP = " \u{B7} "    -- middle dot
+local BULLET = "\u{2022} " -- bullet
+
+local function width(text) return utf8.len(text) or #text end
+
+-- Joins parts with separators into lines that fit the chat width.
+local function pack(parts)
+    local out, cur = {}, nil
+    for _, p in ipairs(parts) do
+        if cur and width(INDENT .. cur .. SEP .. p) <= WIDTH then
+            cur = cur .. SEP .. p
+        else
+            if cur then out[#out + 1] = INDENT .. cur end
+            cur = p
+        end
+    end
+    if cur then out[#out + 1] = INDENT .. cur end
+    return out
+end
+
+-- The summary for one player as blocks of lines: a header, then one block per base (its name,
+-- its items, then what else happened there). Also returns their biggest gains, for pickup popups.
 -- Returns nil if there's nothing worth telling them.
 function M.format(entry, itemName, maxItems)
     maxItems = maxItems or 6
@@ -65,31 +89,54 @@ function M.format(entry, itemName, maxItems)
         return (x.b.name or x.id) < (y.b.name or y.id)
     end)
 
-    local lines, totals = {}, {}
+    local blocks, totals = {}, {}
     for i, e in ipairs(bases) do
         local b = e.b
-        local parts = {}
-        local items = sortedItems(b.items)
-        for j, it in ipairs(items) do
+        local items, events = {}, {}
+        local list = sortedItems(b.items)
+        for j, it in ipairs(list) do
             totals[it.item] = (totals[it.item] or 0) + it.n
-            if j <= maxItems then parts[#parts + 1] = "+" .. M.number(it.n) .. " " .. itemName(it.item) end
+            if j <= maxItems then items[#items + 1] = "+" .. M.number(it.n) .. " " .. itemName(it.item) end
         end
-        if #items > maxItems then parts[#parts + 1] = ("+%d more"):format(#items - maxItems) end
+        if #list > maxItems then items[#items + 1] = "+" .. plural(#list - maxItems, "more item") end
         for _, c in ipairs(sortedItems(b.crafts)) do
-            parts[#parts + 1] = plural(c.n, itemName(c.item) .. " craft")
+            events[#events + 1] = M.number(c.n) .. " " .. itemName(c.item) .. " crafted"
         end
-        if b.hatched > 0 then parts[#parts + 1] = plural(b.hatched, "incubator") .. " finished" end
-        if (b.machines or 0) > 0 then parts[#parts + 1] = plural(b.machines, "machine job") .. " finished" end
-        if b.eggs > 0 then parts[#parts + 1] = plural(b.eggs, "egg") .. " laid" end
-        if b.expeditions > 0 then parts[#parts + 1] = plural(b.expeditions, "expedition") .. " moved ahead" end
-        if b.eaten > 0 then parts[#parts + 1] = "Pals ate " .. M.number(b.eaten) .. " food" end
-        if #parts > 0 then
-            lines[#lines + 1] = (b.name or ("Base " .. i)) .. ": " .. table.concat(parts, ", ")
+        if b.hatched > 0 then events[#events + 1] = plural(b.hatched, "egg") .. " hatched" end
+        if b.eggs > 0 then events[#events + 1] = plural(b.eggs, "egg") .. " laid" end
+        if (b.machines or 0) > 0 then events[#events + 1] = plural(b.machines, "machine job") .. " done" end
+        if b.expeditions > 0 then events[#events + 1] = plural(b.expeditions, "expedition") .. " moved ahead" end
+        if b.eaten > 0 then events[#events + 1] = "Pals ate " .. M.number(b.eaten) .. " food" end
+        if #items + #events > 0 then
+            local block = { BULLET .. (b.name or ("Base " .. i)) }
+            for _, l in ipairs(pack(items)) do block[#block + 1] = l end
+            for _, l in ipairs(pack(events)) do block[#block + 1] = l end
+            blocks[#blocks + 1] = block
         end
     end
-    if #lines == 0 then return nil end
-    table.insert(lines, 1, ("While you were away (%s), your bases kept working:"):format(duration(entry.hours)))
-    return lines, sortedItems(totals)
+    if #blocks == 0 then return nil end
+    table.insert(blocks, 1, { ("While you were away (%s), your bases kept working:"):format(duration(entry.hours)) })
+    return blocks, sortedItems(totals)
+end
+
+-- Groups the blocks into chat messages of at most maxLines lines each (a base is never split
+-- unless it alone is longer). One message keeps the lines in order and shows one sender tag.
+function M.messages(blocks, maxLines)
+    maxLines = math.max(1, maxLines or 16)
+    local out, cur = {}, {}
+    local function flush()
+        if #cur > 0 then out[#out + 1] = table.concat(cur, "\n") end
+        cur = {}
+    end
+    for _, block in ipairs(blocks) do
+        if #cur > 0 and #cur + #block > maxLines then flush() end
+        for _, line in ipairs(block) do
+            if #cur >= maxLines then flush() end
+            cur[#cur + 1] = line
+        end
+    end
+    flush()
+    return out
 end
 
 return M
