@@ -42,6 +42,14 @@ test("long lists are cut off with '+N more', and gains add up across catch-ups",
     expect(lines[2] == "Base: +11 Item A, +9 Item I, +8 Item H, +6 more", lines[2])
 end)
 
+test("other self-running work isn't called an incubator", function()
+    local pending = {}
+    summary.add(pending, "P", "B", "Base 1", { items = {}, machines = 1 })
+    summary.addHours(pending, { P = true }, 1)
+    local lines = summary.format(pending.P, pretty)
+    expect(lines[2] == "Base 1: 1 machine job finished", tostring(lines[2]))
+end)
+
 test("nothing gained means no summary", function()
     local pending = {}
     summary.add(pending, "P", "B", "Base", { items = {} })

@@ -82,7 +82,8 @@ end
 function F.work(baseN, idN, required, current, rate, ownerN)
     local w = obj({ ID = F.guid(idN), BaseCampIdBelongTo = F.guid(baseN), RequiredWorkAmount = required,
                     CurrentWorkAmount = current, AutoWorkSelfAmountBySec = rate,
-                    OwnerMapObjectConcreteModelId = F.guid(ownerN or 0) })
+                    OwnerMapObjectConcreteModelId = F.guid(ownerN or 0),
+                    CurrentState = 1 }) -- EPalWorkProgressState::Workable
     w.IsCompleted = function(self) return self.CurrentWorkAmount >= self.RequiredWorkAmount end
     w.OnRep_CurrentWorkAmount = function() count("OnRep_CurrentWorkAmount") end
     return w
@@ -155,6 +156,12 @@ F.kismet = obj({
     UtcNow = function() return F.dt(os.time()) end,
     Now = function() return F.dt(os.time() + localOffset()) end,
     Subtract_DateTimeDateTime = function(_, a, b) return { _s = a._t - b._t } end,
+    GetYear = function(_, a) return os.date("*t", math.floor(a._t)).year end,
+    GetMonth = function(_, a) return os.date("*t", math.floor(a._t)).month end,
+    GetDay = function(_, a) return os.date("*t", math.floor(a._t)).day end,
+    GetHour = function(_, a) return os.date("*t", math.floor(a._t)).hour end,
+    GetMinute = function(_, a) return os.date("*t", math.floor(a._t)).min end,
+    GetSecond = function(_, a) return os.date("*t", math.floor(a._t)).sec end,
     Subtract_DateTimeTimespan = function(_, a, s) return F.dt(a._t - s._s) end,
     MakeTimespan = function(_, d, h, m, s, ms) return { _s = d * 86400 + h * 3600 + m * 60 + s + ms / 1000 } end,
     GetTotalSeconds = function(_, s) return s._s end,
@@ -171,5 +178,35 @@ function F.itemManager()
 end
 
 function F.fstr(s) return fstr(s) end
+
+-- A model whose date properties behave like UE4SS: assigning a date value directly is
+-- silently ignored, but importing the date as text ("YYYY.MM.DD-HH.MM.SS") works.
+function F.dateModel(fields)
+    local store = {}
+    for k, v in pairs(fields) do store[k] = v end
+    local imports = 0
+    local m = {}
+    local reflection = { GetProperty = function(_, name)
+        return {
+            ContainerPtrToValuePtr = function() return name end,
+            ImportText = function(_, text, ptr)
+                local y, mo, d, h, mi, se = text:match("^(%d%d%d%d)%.(%d%d)%.(%d%d)%-(%d%d)%.(%d%d)%.(%d%d)$")
+                assert(y, "bad date text: " .. tostring(text))
+                store[ptr] = F.dt(os.time({ year = y, month = mo, day = d, hour = h, min = mi, sec = se }))
+                imports = imports + 1
+            end,
+        }
+    end }
+    store.Reflection = function() return reflection end
+    store.IsValid = function() return true end
+    store.imports = function() return imports end
+    return setmetatable(m, {
+        __index = store,
+        __newindex = function(_, k, v)
+            if type(v) == "table" and v._t then return end -- direct date writes don't stick
+            store[k] = v
+        end,
+    })
+end
 
 return F

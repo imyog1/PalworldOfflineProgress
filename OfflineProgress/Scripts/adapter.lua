@@ -270,22 +270,49 @@ function M.realProgressTimers()
     return out
 end
 
--- Moves a real-progress timer's dates earlier by `seconds`. Returns true if every date
--- reads back as moved by that amount.
+-- A date as the engine's text form, "YYYY.MM.DD-HH.MM.SS" (what FDateTime imports and exports).
+local function dateText(dt)
+    local K = kismet()
+    return ("%04d.%02d.%02d-%02d.%02d.%02d"):format(K:GetYear(dt), K:GetMonth(dt), K:GetDay(dt),
+        K:GetHour(dt), K:GetMinute(dt), K:GetSecond(dt))
+end
+
+-- Writes a date property. Assigning a date value directly doesn't stick in this UE4SS build
+-- (FDateTime has no fields Lua can see), so if that doesn't read back, the date is imported
+-- as text, the same way the engine loads it. `isMoved` checks the result.
+-- Returns the method that worked ("assign" or "text"), or nil and the error.
+local function writeDate(obj, field, value, isMoved)
+    local ok, err = pcall(function() obj[field] = value end)
+    if ok and isMoved() then return "assign" end
+    local okText, errText = pcall(function()
+        local prop = obj:Reflection():GetProperty(field)
+        prop:ImportText(dateText(value), prop:ContainerPtrToValuePtr(obj, 0), 0, obj)
+    end)
+    if okText and isMoved() then return "text" end
+    return nil, tostring(errText or err or "date didn't change")
+end
+
+-- Moves a real-progress timer's dates earlier by `seconds`. Returns true if every date reads
+-- back as moved by that amount, plus the write method used or the first error.
 function M.shiftRealProgress(t, seconds)
-    local allOk = true
+    local allOk, method, firstErr = true, nil, nil
     for _, field in ipairs(t.fields) do
-        local ok, moved = pcall(function()
+        local ok, used, err = pcall(function()
             local original = minusSeconds(t.ref[field], 0) -- a copy, not a view of the live value
-            t.ref[field] = minusSeconds(original, seconds)
-            if field == t.fields[#t.fields] then
+            local function isMoved()
+                local okM, moved = pcall(function() return secondsBetween(original, t.ref[field]) end)
+                return okM and math.abs(moved - seconds) <= 2
+            end
+            local m, e = writeDate(t.ref, field, minusSeconds(original, seconds), isMoved)
+            if m and field == t.fields[#t.fields] then
                 try(function() t.ref[t.onRep](t.ref, original) end)
             end
-            return secondsBetween(original, t.ref[field])
+            return m, e
         end)
-        if not ok or math.abs(moved - seconds) > 2 then allOk = false end
+        if not ok then used, err = nil, tostring(used) end
+        if used then method = method or used else allOk = false; firstErr = firstErr or err end
     end
-    return allOk
+    return allOk, method, firstErr
 end
 
 -- { hour, day, phase } of the in-game clock, or nil.
@@ -691,18 +718,41 @@ local function needsPower(work)
     return ok and v or false
 end
 
--- Self-progressing work at a base (incubators and similar):
--- { { id, remaining = seconds, owner, power }, ... }
+local WORKABLE = 1 -- EPalWorkProgressState::Workable
+
+-- Is this work actually running? An empty incubator still has a work object, but the game
+-- marks it NotWorkable; advancing it would report an egg that doesn't exist.
+local function isRunning(work)
+    local ok, state = pcall(function() return work.CurrentState end)
+    if ok and type(state) == "number" and state ~= WORKABLE then return false end
+    local owner = nil
+    pcall(function() owner = work.CachedOwnerMapObjectConcreteModel end)
+    if valid(owner) then
+        local okW, workable = pcall(function() return owner:IsWorkable() end)
+        if okW and workable == false then return false end
+    end
+    return true
+end
+
+-- "incubator" for egg incubators, "machine" for any other self-running work.
+local function timerKind(work)
+    local ok, name = pcall(function() return className(work.CachedOwnerMapObjectConcreteModel) end)
+    if ok and name and name:find("HatchingEgg", 1, true) then return "incubator" end
+    return "machine"
+end
+
+-- Self-progressing work at a base that is actually running (incubators with an egg and similar):
+-- { { id, remaining = seconds, owner, power, kind }, ... }
 function M.getTimers(baseId)
     local timers = {}
     for _, work in ipairs(findAll(CLASSES.work)) do
         local rate = work.AutoWorkSelfAmountBySec
         if rate > 0 and work.RequiredWorkAmount > 0 and not work:IsCompleted()
-            and guidKey(work.BaseCampIdBelongTo) == baseId then
+            and guidKey(work.BaseCampIdBelongTo) == baseId and isRunning(work) then
             local id = guidKey(work.ID)
             workById[id] = work
             timers[#timers + 1] = { id = id, remaining = (work.RequiredWorkAmount - work.CurrentWorkAmount) / rate,
-                                    owner = ownerKey(work), power = needsPower(work) }
+                                    owner = ownerKey(work), power = needsPower(work), kind = timerKind(work) }
         end
     end
     return timers
@@ -732,7 +782,7 @@ function M.advanceNextAtOwner(owner, seconds, exceptIds)
     for _, work in ipairs(findAll(CLASSES.work)) do
         local rate = work.AutoWorkSelfAmountBySec
         if rate > 0 and work.RequiredWorkAmount > 0 and not work:IsCompleted() and ownerKey(work) == owner
-            and not exceptIds[guidKey(work.ID)] then
+            and not exceptIds[guidKey(work.ID)] and isRunning(work) then
             local remaining = (work.RequiredWorkAmount - work.CurrentWorkAmount) / rate
             local step = math.min(seconds, remaining)
             local target = work.CurrentWorkAmount + step * rate

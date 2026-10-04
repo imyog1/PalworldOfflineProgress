@@ -27,8 +27,8 @@ Base 7: +224 Pure Quartz, +50 Stone, +32 Ore, Pals ate 20 food
   new Pals and rebuilt production lines are picked up automatically.
 - **Realistic catch-up.** Storage fills up, feed boxes run dry, and Pals stop working when there's
   no food. Offline work runs at 75% by default and is capped at 24 hours.
-- **More than items.** Incubators keep hatching. Expeditions and medical-bed revivals finish on
-  time; the game stops their clock while the world is closed.
+- **More than items.** Incubators keep hatching and breeding farms keep laying eggs. Expeditions
+  and medical-bed revivals finish on time; the game stops their clock while the world is closed.
 - **Per-player summaries.** After each catch-up, every player gets a private chat summary and
   pickup popups for the bases they placed. Players who are offline get theirs when they next join.
 - **Only the host needs it.** Other players need nothing installed, on any platform.
@@ -98,10 +98,10 @@ so you can check what it would do first.
 | Feature | Default | What it does |
 |---|---|---|
 | `items` | on | Production added to storage, food eaten from feed boxes |
-| `timers` | on | Incubators and other self-running work |
+| `timers` | on | Incubators (with an egg) and other self-running work |
 | `expeditions` | on | Expeditions and medical-bed revivals |
+| `breeding` | on | Breeding farms lay the eggs they would have (needs Pals and cake in the farm) |
 | `crafting` | off | Crafting queues advance and their products are added |
-| `breeding` | off | Breeding farms lay the eggs they would have |
 | `spoilage` | off | Food in storage ages by the downtime |
 | `palNeeds` | off | Base Pals get hungry once food runs out; sanity drifts |
 | `worldTime` | off | The in-game clock and day counter move forward (needs CheatManagerEnablerMod) |

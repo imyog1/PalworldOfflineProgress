@@ -1,16 +1,16 @@
 -- "While you were away" summaries, kept per player until they're in the world to see them.
 -- Pure Lua, no UE4SS calls.
 --
--- pending[playerKey] = { hours, bases = { [baseId] = { name, items, eaten, hatched, eggs, crafts, expeditions } } }
+-- pending[playerKey] = { hours, bases = { [baseId] = { name, items, eaten, hatched, machines, eggs, crafts, expeditions } } }
 
 local M = {}
 
 local function newBase(name)
-    return { name = name, items = {}, eaten = 0, hatched = 0, eggs = 0, crafts = {}, expeditions = 0 }
+    return { name = name, items = {}, eaten = 0, hatched = 0, machines = 0, eggs = 0, crafts = {}, expeditions = 0 }
 end
 
 -- Adds one base's gains from one catch-up to a player's pending summary.
--- gains = { items = {id=n}, eaten = n, hatched = n, eggs = n, crafts = {id=n}, expeditions = n }
+-- gains = { items = {id=n}, eaten = n, hatched = n, machines = n, eggs = n, crafts = {id=n}, expeditions = n }
 function M.add(pending, player, baseId, name, gains)
     local entry = pending[player] or { hours = 0, bases = {} }
     pending[player] = entry
@@ -21,6 +21,7 @@ function M.add(pending, player, baseId, name, gains)
     for id, n in pairs(gains.crafts or {}) do b.crafts[id] = (b.crafts[id] or 0) + n end
     b.eaten = b.eaten + (gains.eaten or 0)
     b.hatched = b.hatched + (gains.hatched or 0)
+    b.machines = (b.machines or 0) + (gains.machines or 0)
     b.eggs = b.eggs + (gains.eggs or 0)
     b.expeditions = b.expeditions + (gains.expeditions or 0)
 end
@@ -78,6 +79,7 @@ function M.format(entry, itemName, maxItems)
             parts[#parts + 1] = plural(c.n, itemName(c.item) .. " craft")
         end
         if b.hatched > 0 then parts[#parts + 1] = plural(b.hatched, "incubator") .. " finished" end
+        if (b.machines or 0) > 0 then parts[#parts + 1] = plural(b.machines, "machine job") .. " finished" end
         if b.eggs > 0 then parts[#parts + 1] = plural(b.eggs, "egg") .. " laid" end
         if b.expeditions > 0 then parts[#parts + 1] = plural(b.expeditions, "expedition") .. " moved ahead" end
         if b.eaten > 0 then parts[#parts + 1] = "Pals ate " .. M.number(b.eaten) .. " food" end

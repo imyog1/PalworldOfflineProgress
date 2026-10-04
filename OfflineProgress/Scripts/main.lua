@@ -1,7 +1,7 @@
 -- OfflineProgress: catches Palworld bases up for the time a world was offline.
 -- UE4SS Lua mod targeting Palworld 1.0.5 with Okaetsu's RE-UE4SS (experimental-palworld).
 
-local MOD_VERSION = "1.0.0"
+local MOD_VERSION = "1.0.1"
 
 local cfg = require("config")
 local store = require("store")
@@ -351,24 +351,30 @@ local function realProgress(seconds, live)
     expeditionsByBase = {}
     local timers = adapter.realProgressTimers()
     if #timers == 0 then return end
-    local counts, failed = {}, 0
+    local counts, failed, methods, firstErr = {}, 0, {}, nil
     for _, t in ipairs(timers) do
         counts[t.kind] = (counts[t.kind] or 0) + 1
         if live then
-            if adapter.shiftRealProgress(t, seconds) then
+            local ok, method, err = adapter.shiftRealProgress(t, seconds)
+            if ok then
+                methods[method or "?"] = true
                 if t.kind == "expedition" and t.baseId then
                     expeditionsByBase[t.baseId] = (expeditionsByBase[t.baseId] or 0) + 1
                 end
             else
                 failed = failed + 1
+                firstErr = firstErr or err
             end
         end
     end
-    local parts = {}
+    local parts, used = {}, {}
     for kind, n in pairs(counts) do parts[#parts + 1] = ("%d %s(s)"):format(n, kind) end
+    for m in pairs(methods) do used[#used + 1] = m end
     table.sort(parts)
-    log("Real-progress timers%s: %s moved %.2fh forward%s.", live and "" or " (dry run)", table.concat(parts, ", "),
-        seconds / 3600, failed > 0 and (", but %d didn't read back as moved"):format(failed) or "")
+    table.sort(used)
+    log("Real-progress timers%s: %s moved %.2fh forward%s%s.", live and "" or " (dry run)", table.concat(parts, ", "),
+        seconds / 3600, #used > 0 and (" (written by " .. table.concat(used, "/") .. ")") or "",
+        failed > 0 and ("; %d didn't read back as moved: %s"):format(failed, tostring(firstErr)) or "")
 end
 
 local function clockSpec(c)
@@ -543,9 +549,14 @@ local function catchUpBases(seconds, tl, apply)
         for _, t in ipairs(catchup.advanceTimers(powered, math.min(seconds, fedSeconds) * cfg.timerEfficiency)) do
             timers[#timers + 1] = t
         end
-        local finished = 0
-        for _, t in ipairs(timers) do if t.done then finished = finished + 1 end end
-        local gains = { items = {}, crafts = {}, eaten = 0, hatched = 0, eggs = 0,
+        local finished, hatched, machines = 0, 0, 0
+        for _, t in ipairs(timers) do
+            if t.done then
+                finished = finished + 1
+                if t.kind == "incubator" then hatched = hatched + 1 else machines = machines + 1 end
+            end
+        end
+        local gains = { items = {}, crafts = {}, eaten = 0, hatched = 0, machines = 0, eggs = 0,
                         expeditions = expeditionsByBase[id] or 0 }
 
         if trusted > 0 or #timers > 0 or next(whole) or next(feed) then
@@ -624,7 +635,7 @@ local function catchUpBases(seconds, tl, apply)
         -- Timers
         if live.timers and #timers > 0 then
             adapter.applyTimers(id, timers)
-            gains.hatched = finished
+            gains.hatched, gains.machines = hatched, machines
             for _, t in ipairs(timers) do
                 if t.done and t.owner and t.leftover > 1 then
                     jobs[#jobs + 1] = { kind = "timer", owner = t.owner, seconds = t.leftover, except = { [t.id] = true } }
@@ -693,7 +704,7 @@ local function catchUpBases(seconds, tl, apply)
             who[owners[id].owner] = true
         end
         local name = base.shared and "Shared storage" or (owners[id] and owners[id].name) or nil
-        local any = next(gains.items) or next(gains.crafts) or gains.eaten > 0 or gains.hatched > 0
+        local any = next(gains.items) or next(gains.crafts) or gains.eaten > 0 or gains.hatched > 0 or gains.machines > 0
             or gains.eggs > 0 or gains.expeditions > 0
         if any then
             if next(who) == nil then log("  %s: owner unknown, so it isn't in anyone's summary", short(id)) end

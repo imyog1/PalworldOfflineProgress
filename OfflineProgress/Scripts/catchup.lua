@@ -226,7 +226,7 @@ function M.advanceTimers(timers, seconds)
     for _, tm in ipairs(timers or {}) do
         local left = tm.remaining - seconds
         out[#out + 1] = { id = tm.id, remaining = math.max(0, left), done = left <= 0,
-                          leftover = math.max(0, -left), owner = tm.owner, power = tm.power }
+                          leftover = math.max(0, -left), owner = tm.owner, power = tm.power, kind = tm.kind }
     end
     return out
 end

@@ -273,6 +273,45 @@ test("players come from the game state's player list, without a search", functio
     expectEq(F.searches.PalPlayerState or 0, before, "no search for player states")
 end)
 
+test("empty incubators are not counted as timers (Nexus report)", function()
+    local function owner(name, workable)
+        return F.obj({ GetClass = function() return { GetFName = function() return FName(name) end } end,
+                       IsWorkable = function() return workable end })
+    end
+    local egg = F.work(9, 901, 100, 10, 2, 900)
+    egg.CachedOwnerMapObjectConcreteModel = owner("PalMapObjectHatchingEggModel", true)
+    local emptyByState = F.work(9, 902, 100, 10, 2, 901)
+    emptyByState.CurrentState = 2 -- NotWorkable: no egg
+    local emptyByOwner = F.work(9, 903, 100, 10, 2, 902)
+    emptyByOwner.CachedOwnerMapObjectConcreteModel = owner("PalMapObjectHatchingEggModel", false)
+    local machine = F.work(9, 904, 100, 10, 2, 903)
+    local saved = F.world.PalWorkProgress
+    F.world.PalWorkProgress = { egg, emptyByState, emptyByOwner, machine }
+    adapter.setGameState(F.obj({ GetWorldSaveDirectoryName = function() return F.fstr("8122951F") end }))
+    local t = adapter.getTimers(key(9))
+    F.world.PalWorkProgress = saved
+    expectEq(#t, 2, "only the incubator with an egg and the running machine")
+    local kinds = {}
+    for _, x in ipairs(t) do kinds[x.id] = x.kind end
+    expectEq(kinds[key(901)], "incubator", "incubator with an egg")
+    expectEq(kinds[key(904)], "machine", "other self-running work")
+end)
+
+test("expedition dates are written as text when a direct write doesn't stick (Nexus report)", function()
+    local start, finish = os.time() - 3000, os.time() + 3000
+    local m = F.dateModel({ State = 2, MissionStartDateTime = F.dt(start), MissionCompleteDateTime = F.dt(finish),
+                            OnRep_MissionCompleteDateTime = function() end,
+                            GetBaseCampIdBelongTo = function() return F.guid(1) end, GetAddress = function() return 4242 end })
+    F.world.PalMapObjectCharacterTeamMissionModel = { m }
+    local timers = adapter.realProgressTimers()
+    local ok, method, err = adapter.shiftRealProgress(timers[1], 1800)
+    expect(ok, "moved: " .. tostring(err))
+    expectEq(method, "text", "fell back to importing the date as text")
+    expectEq(m.MissionCompleteDateTime._t, finish - 1800, "finish 30 min earlier")
+    expectEq(m.MissionStartDateTime._t, start - 1800, "start too")
+    expectEq(m.imports(), 2, "both dates imported")
+end)
+
 test("describe summarises the scan and warns about unsaved containers", function()
     local s = adapter.describe()
     expect(s:find("found 2 base%(s%)") and s:find("1 shared storage") and s:find("1 crafting station%(s%) %(1 with a queue%)"),

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.1 (2026-10-04)
+
+Fixes from player reports on Nexus Mods.
+
+- **Expeditions now progress while the game is closed.** The finish time couldn't be written
+  directly, so it's now written the way the game loads dates. The log says which way worked, or
+  why it didn't.
+- **No more incubator messages without eggs.** Empty incubators were counted as running and
+  reported as "1 incubator finished" on every load. Only work the game marks as running is
+  advanced now, and other self-running machines are reported as "machine job finished".
+- **Breeding farms are on by default.** Farms with Pals and cake lay the eggs they would have
+  laid. (In 1.0.0 this was off and only logged.)
+
 ## 1.0.0 (2026-10-02)
 
 First release, for Palworld 1.0.5.

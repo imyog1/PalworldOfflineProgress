@@ -16,7 +16,7 @@ return {
         palNeeds = false,   -- base Pals get hungry once food runs out; sanity drifts
         worldTime = false,  -- in-game clock and day counter move forward
         crafting = false,   -- crafting queues advance (needed for crafted items to be added)
-        breeding = false,   -- breeding farms produce the eggs they would have
+        breeding = true,    -- breeding farms produce the eggs they would have
         crops = false,      -- crop plots keep growing (visual only; harvests come from rates)
         expeditions = true, -- expeditions and medical-bed revivals finish on time
     },
